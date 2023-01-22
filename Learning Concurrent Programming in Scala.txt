@@ -1,0 +1,5 @@
+# Learning Concurrent Programming in Scala
+
+## Chapter 1
+
+In concurrent programming, we express a program as a set of concurrent computations that execute during overlapping time intervals and coordinate in some way. Implementing a concurrent program that functions correctly is usually much harder than implementing a sequential one.
