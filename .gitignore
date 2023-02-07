@@ -1,0 +1,27 @@
+# IntelliJ
+.idea/
+out/
+# OS generated files
+.DS_Store
+# Editor directories and files
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+# Metals
+.metals
+.bloop
+project/**/metals.sbt
+.bsp/
+# sbt's target directories
+/target/
+/project/**/target/
+/test/macro-annot/target/
+/test/files/target/
+/test/target/
+/build-sbt/
+local.sbt
+
+#Scala
+/build/
