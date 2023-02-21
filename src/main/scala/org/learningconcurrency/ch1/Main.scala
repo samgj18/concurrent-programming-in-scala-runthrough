@@ -1,9 +1,9 @@
 package org.learningconcurrency.ch1
 
-import org.learningconcurrency.ch1.Main.Pair
+import org.learningconcurrency.ch1.ExerciseChapterOne.Pair
 import scala.annotation.tailrec
 
-object Main extends App {
+object ExerciseChapterOne extends App {
   private def square(x: Int): Int = x * x
 
   private val s = square(5)
