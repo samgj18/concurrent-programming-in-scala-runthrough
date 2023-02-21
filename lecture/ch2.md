@@ -75,7 +75,7 @@ The way this code works is as follows:
 - Then the OS decides to assign the new thread to some processor, (this is largely out of the programmer's control). This method halts the execution of the main thread until t completes its execution.
 - The join operation puts the main thread into the waiting state until t terminates.
 
-![Threads](images/threads.png)
+![Threads](images/Threads.png)
 
 It is important to note that the two outputs "New thread running." and "New thread joined." are always printed in this order. This is because the join call ensures that the termination of the t thread occurs before the instructions following the join call.
 
