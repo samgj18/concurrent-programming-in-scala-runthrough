@@ -4,7 +4,7 @@
 
 This is nothing but the runthrough of the book's content.
 
-## [Chapter 1](lecture/ch1.md)
+## [Chapter 1](https://samuelgomez.co/posts/concurrent-programming-in-scala-part-1/)
 
 This chapter explains the basics of concurrent computing and presents some Scala preliminaries required for this book.
 Specifically, it does the following:
@@ -13,7 +13,7 @@ Specifically, it does the following:
 - Studies the advantages of using Scala when it comes to concurrency
 - Covers the Scala preliminaries required for reading this book
 
-## [Chapter 2](lecture/ch2.md)
+## [Chapter 2]([lecture/ch2.md](https://samuelgomez.co/posts/concurrent-programming-in-scala-part-2/)
 
 This chapter not only explains the cornerstones of concurrency on the JVM, but also discuss how they interact with some
 Scala-specific features. In particular, we will cover the following topics:
