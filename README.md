@@ -23,3 +23,13 @@ Scala-specific features. In particular, we will cover the following topics:
 - How to avoid busy-waiting using guarded blocks
 - The semantics of volatile variables
 - The specifics of the **Java Memory Model (JMM)**, and why the `JMM` is important
+
+## [Chapter 3](https://samuelgomez.co/posts/concurrent-programming-in-scala-part-3/)
+
+This chapter presents the traditional building blocks of concurrent programs in Scala. Also covers the following:
+
+- Using Executor objects to run concurrent computations
+- Using atomic primitives to atomically switch between different states in the program and implement locks and lock-free algorithms.
+- The implementation of lazy values and their impact on concurrent programs
+- Some important classes of concurrent collections and learned how to apply them in practice
+- Learn how to use some features from the scala.sys.process package
