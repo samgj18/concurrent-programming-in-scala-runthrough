@@ -17,4 +17,4 @@ resolvers ++= Seq(
     "https://repo.typesafe.com/typesafe/releases/"
 )
 
-libraryDependencies += "commons-io" % "commons-io" % "20030203.000550"
+libraryDependencies += "commons-io" % "commons-io" % "2.11.0"

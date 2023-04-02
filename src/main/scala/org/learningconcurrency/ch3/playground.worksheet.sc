@@ -5,7 +5,11 @@ val anotherString = new String("Hello")
 // Reference equality
 newString eq anotherString // false
 
-// Value equality
+/** Two values a and b are equal, a == b , whenever they have equal contents,
+  * regardless of the physical representation, or identity, of those values in
+  * memory
+  */
+// Structural equality
 newString == anotherString // true
 
 // Equals and HashCode note:

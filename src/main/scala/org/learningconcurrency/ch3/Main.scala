@@ -5,6 +5,10 @@ import java.util.concurrent.ForkJoinPool // Scala alias is deprecated since 2.12
 import java.util.concurrent.TimeUnit
 import scala.concurrent.ExecutionContext
 import scala.annotation.tailrec
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
+import scala.util.Try
+import scala.collection.concurrent.TrieMap
 
 object CreateExecutor extends App {
   // One Executor implementation, introduced in JDK7
@@ -168,48 +172,6 @@ object AtomicLock extends App {
 
 // FileSystem API
 
-object FileSystem {
-  // 1. Ensure that only one thread can delete the file at the same time
-
-  sealed trait State
-  object Idle extends State
-  object Creating extends State
-
-  /** @param n
-    *   how many concurrent copies are in progress
-    */
-  final case class Copying(val n: Int) extends State
-  object Deleting extends State
-
-  /** Model of a single file or directory entry in a file system.
-    *
-    * @param isDir
-    *   true if the entry is a directory, false if it is a file
-    */
-  class Entry(val isDir: Boolean) {
-    val state = new AtomicReference[State](Idle)
-  }
-
-  @tailrec private def prepareForDelete(entry: Entry): Boolean = {
-    val s0 = entry.state.get()
-
-    s0 match {
-      case Idle =>
-        // An important note about CAS instructions on atomic references is that uses reference equality and never calls equal method (even if it is overridden).
-        // Note:
-        // Referential equality is whether two references point to the same object in a heap -> Review playground.worksheet.sc
-        if (entry.state.compareAndSet(s0, Deleting)) true
-        else prepareForDelete(entry)
-      case Creating =>
-        Instantiator.log("File currently created, cannot delete"); false
-      case Copying(n) =>
-        Instantiator.log("File currently copied, cannot delete"); false
-      case Deleting => false
-    }
-  }
-
-}
-
 object LazyValsCreate extends App {
   lazy val obj = new AnyRef
   lazy val non = s"made by ${Thread.currentThread.getName}"
@@ -241,7 +203,7 @@ object LazyValsUnderTheHood extends App {
   def obj = if (_bitmap) _obj
   else
     this.synchronized {
-      // Here is where the double-checked locking idiom happens, 
+      // Here is where the double-checked locking idiom happens,
       if (!_bitmap) {
         _obj = new AnyRef
         _bitmap = true
@@ -250,4 +212,239 @@ object LazyValsUnderTheHood extends App {
     }
   Instantiator.log(s"$obj")
   Instantiator.log(s"$obj")
+}
+
+object LazyValsDeadlock extends App {
+  object A { lazy val x: Int = B.y }
+  object B { lazy val y: Int = A.x }
+  ECUtil.execute { B.y }
+  A.x
+}
+
+class FileSystem(dir: String) {
+  import FileSystem._
+
+  private val messages = new LinkedBlockingQueue[String]()
+
+  val logger = new Thread {
+    setDaemon(true)
+    override def run(): Unit = while (true) {
+      Instantiator.log(messages.take())
+    }
+  }
+
+  logger.start()
+
+  def logMessage(msg: String): Unit = messages.offer(msg)
+
+  import java.io.File
+  import org.apache.commons.io.FileUtils
+  import scala.collection.concurrent.Map
+  import scala.jdk.CollectionConverters._
+
+  // val files: Map[String, FileSystem.Entry] = new ConcurrentHashMap().asScala
+
+  // We can also use TrieMap to return a consistent state of the files
+  val files: TrieMap[String, Entry] = new TrieMap[String, Entry]
+  val rootDir = new File(dir)
+
+  /** We place each f file along with a fresh Entry object into files by calling
+    * put on the concurrent map. There is no need for a synchronized statement
+    * around put, as the concurrent map takes care of synchronization. The put
+    * operation is atomic, and it establishes a happens-before relationship with
+    * subsequent get operations.
+    *
+    * What is the happens-before relationship?
+    *
+    * For a practical example of what it is visit:
+    * https://www.youtube.com/watch?v=_LnKYiJOUho&ab_channel=DouglasSchmidt
+    */
+  for (f <- FileUtils.iterateFiles(rootDir, null, false).asScala) {
+    files.put(f.getName, new FileSystem.Entry(false))
+  }
+
+  def allFiles: Iterable[String] = {
+    for ((name, _) <- files) yield name
+  }
+
+  @tailrec private def prepareForDelete(entry: Entry): Boolean = {
+    val s0 = entry.state.get()
+
+    s0 match {
+      case Idle =>
+        // An important note about CAS instructions on atomic references is that uses reference equality and never calls equal method (even if it is overridden).
+        // Note:
+        // Referential equality is whether two references point to the same object in a heap -> Review playground.worksheet.sc
+        if (entry.state.compareAndSet(s0, Deleting)) true
+        else prepareForDelete(entry)
+      case Creating =>
+        Instantiator.log("File currently created, cannot delete"); false
+      case Copying(n) =>
+        Instantiator.log("File currently copied, cannot delete"); false
+      case Deleting => false
+    }
+  }
+
+  def deleteFile(fileName: String): Unit = {
+    files.get(fileName) match {
+      case None => logMessage(s"Path '$fileName' does not exist")
+      case Some(entry) if entry.isDir =>
+        logMessage(s"Path '$fileName' is a directory")
+
+      case Some(entry) =>
+        ECUtil.execute {
+          if (prepareForDelete(entry))
+            if (FileUtils.deleteQuietly(new File(fileName)))
+              files.remove(fileName)
+        }
+    }
+  }
+
+  @tailrec
+  private def acquire(entry: Entry): Boolean = {
+    val s0 = entry.state.get()
+
+    s0 match {
+      case Idle =>
+        if (entry.state.compareAndSet(s0, Copying(1))) true else acquire(entry)
+      case Copying(n) =>
+        if (entry.state.compareAndSet(s0, Copying(n + 1))) true
+        else acquire(entry)
+      case _ =>
+        logMessage("File inaccessible, cannot be copied at the moment")
+        false
+    }
+  }
+
+  @tailrec
+  private def release(entry: Entry): Unit = {
+    val s0 = entry.state.get()
+
+    s0 match {
+      case Creating => if (!entry.state.compareAndSet(s0, Idle)) release(entry)
+      case Copying(n) => {
+        val nState = if (n == 1) Idle else Copying(n - 1)
+        if (!entry.state.compareAndSet(s0, nState)) release(entry)
+      }
+      case _ => logMessage("Ilegal state reached")
+    }
+  }
+
+  def copyFile(src: String, dest: String): Unit = {
+    files.get(src) match {
+      case None => logMessage(s"File in '$src' does not exist")
+      case Some(srcEntry) if !srcEntry.isDir =>
+        ECUtil.execute {
+          if (acquire(srcEntry)) Try {
+            val destEntry = new Entry(false)
+            destEntry.state.set(Creating)
+            if (files.putIfAbsent(dest, destEntry) == None) Try {
+              FileUtils.copyFile(new File(src), new File(dest))
+            }
+            release(destEntry)
+            release(srcEntry)
+          }
+        }
+      case _ => logMessage(s"File in '$src' is a directory")
+    }
+  }
+}
+
+object FileSystem {
+  sealed trait State
+  object Idle extends State
+  object Creating extends State
+
+  /** @param n
+    *   how many concurrent copies are in progress
+    */
+  final case class Copying(val n: Int) extends State
+  object Deleting extends State
+
+  /** Model of a single file or directory entry in a file system.
+    *
+    * @param isDir
+    *   true if the entry is a directory, false if it is a file
+    */
+  class Entry(val isDir: Boolean) {
+    val state = new AtomicReference[State](Idle)
+  }
+
+}
+
+object FileSystemExample extends App {
+  val fileSystem = new FileSystem(".")
+  fileSystem.deleteFile("test.txt")
+  fileSystem.logMessage("Testing log!")
+  fileSystem.allFiles.foreach(println)
+}
+
+object CollectionsIterators extends App {
+  val queue = new LinkedBlockingQueue[String]
+  for (i <- 1 to 5500) queue.offer(i.toString)
+  ECUtil.execute {
+    val it = queue.iterator
+    while (it.hasNext) Instantiator.log(it.next())
+  }
+  for (i <- 1 to 5500) queue.poll()
+  Thread.sleep(1000)
+}
+
+object CollectionsConcurrentMapBulk extends App {
+  import scala.jdk.CollectionConverters._
+
+  val names = new ConcurrentHashMap[String, Int]().asScala
+  names("Johnny") = 0
+  names("Jane") = 0
+  names("Jack") = 0
+
+  ECUtil.execute { for (n <- 0 until 10) names(s"John $n") = n }
+  ECUtil.execute { for (n <- names) Instantiator.log(s"name: $n") }
+
+  Thread.sleep(1000)
+}
+
+object CollectionsTrieMapBulk extends App {
+  import scala.jdk.CollectionConverters._
+
+  val names = new TrieMap[String, Int]
+
+  names("Johnny") = 0
+  names("Jane") = 0
+  names("Jack") = 0
+
+  ECUtil.execute { for (n <- 10 until 100) names(s"John $n") = n }
+  ECUtil.execute {
+    Instantiator.log("Snapshot Time")
+    for (n <- names.map(_._1).toSeq.sorted) Instantiator.log(s"name: $n")
+  }
+
+  Thread.sleep(1000)
+}
+
+import scala.sys.process._
+/** The scala.sys.process package contains a concise API for dealing with other
+  * processes. We can run the child process synchronously—in which case, the
+  * thread from the parent process that runs it waits until the child process
+  * terminates—or asynchronously—in which case, the child process runs
+  * concurrently with the calling thread from the parent process.
+  */
+object ProcessRun extends App {
+  val command = "ls -a"
+  val exitcode = command.!
+  Instantiator.log(s"command exited with status $exitcode")
+
+  def lineCount(filename: String): Int = {
+    val output = s"wc $filename".!!
+    output.trim.split(" ").head.toInt
+  }
+
+  Instantiator.log(lineCount("./build.sbt").toString)
+}
+
+object ProcessAsync extends App {
+  val lsProcess = "ls -R /".run()
+  Thread.sleep(1000)
+  Instantiator.log("Timeout - killing ls!")
+  lsProcess.destroy()
 }
