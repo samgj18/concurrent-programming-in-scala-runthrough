@@ -9,6 +9,9 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import scala.util.Try
 import scala.collection.concurrent.TrieMap
+import scala.util.Failure
+import scala.util.Success
+import java.util.concurrent.ConcurrentLinkedQueue
 
 object CreateExecutor extends App {
   // One Executor implementation, introduced in JDK7
@@ -55,8 +58,7 @@ object ExecutionContextGlobal extends App {
 }
 
 // We can also create an ExecutionContext from an Executor using `fromExecutor` and `fromExecutorService` methods:
-object ExecutionContextCreate extends App {
-  val pool =
+object ExecutionContextCreate extends App { val pool =
     new ForkJoinPool(
       2
     ) // Parallelism level (# of worker threads in the thread pool)
@@ -423,6 +425,7 @@ object CollectionsTrieMapBulk extends App {
 }
 
 import scala.sys.process._
+
 /** The scala.sys.process package contains a concise API for dealing with other
   * processes. We can run the child process synchronously—in which case, the
   * thread from the parent process that runs it waits until the child process
@@ -447,4 +450,127 @@ object ProcessAsync extends App {
   Thread.sleep(1000)
   Instantiator.log("Timeout - killing ls!")
   lsProcess.destroy()
+}
+
+/** Implement a custom ExecutionContext class called PiggybackContext, which
+  * executes Runnable objects on the same thread that calls execute. Ensure that
+  * a Runnable object executing on the PiggybackContext can also call execute
+  * and that exceptions are properly reported.
+  */
+object PiggybackContext extends App {
+  object Context extends ExecutionContext {
+
+    // Try executes the runnable.run in the same code
+    override def execute(runnable: Runnable): Unit = Try(runnable.run()) match {
+      case Failure(exception) => reportFailure(exception)
+      case Success(_)         =>
+    }
+
+    override def reportFailure(cause: Throwable): Unit =
+      Instantiator.log(cause.getMessage())
+
+  }
+}
+
+/** Implement a TreiberStack class, which implements a concurrent stack
+  * abstraction:
+  *
+  * class TreiberStack[T] { def push(x: T): Unit = ??? def pop(): T = ??? }
+  */
+class TreiberStack[T] {
+  private val stack = new AtomicReference[List[T]](List.empty)
+
+  @tailrec
+  final def push(x: T): Unit = {
+    val s0 = stack.get()
+    val s1 = x :: s0
+
+    if (!stack.compareAndSet(s0, s1)) push(x)
+  }
+
+  @tailrec
+  final def pop(): T = {
+    val s0 = stack.get()
+    val s1 = s0.tail
+
+    if (stack.compareAndSet(s0, s1)) s0.head
+    else pop()
+  }
+}
+
+/** class ConcurrentSortedList[T](implicit val ord: Ordering[T]) { def add(x:
+  * T): Unit = ??? def iterator: Iterator[T] = ??? }
+  *
+  * We could also implement this in terms of Node
+  */
+
+class ConcurrentSortedList[T: Ordering] {
+  private val sorted = new AtomicReference[List[T]](List.empty)
+
+  @tailrec
+  final def add(x: T): Unit = {
+    val s0 = sorted.get()
+    val s1 = (x :: s0).sorted
+
+    if (!sorted.compareAndSet(s0, s1)) add(x)
+  }
+
+  // The Iterator object returned by the iterator method must correctly
+  // traverse the elements of the list in the ascending order under the assumption
+  // that there are no concurrent invocations of the add method
+  final def iterator: Iterator[T] = sorted.get().iterator
+}
+
+class ConcurrentSortedListNode[T: Ordering] {
+  case class Node(
+      head: T,
+      tail: AtomicReference[Option[Node]] =
+        new AtomicReference[Option[Node]](None)
+  )
+
+  private val root = new AtomicReference[Option[Node]](None)
+
+  @tailrec
+  private def add(node: AtomicReference[Option[Node]], x: T): Unit = {
+    val s0: Option[Node] = node.get()
+
+    s0 match {
+      case None => if (!node.compareAndSet(s0, Some(Node(x)))) add(node, x)
+      case Some(Node(head, tail)) => {
+
+        //  - negative if x < head -> Prepend
+        //  - positive if x > head -> Append
+        //  - zero otherwise (if x == head) -> Prepend
+        if (implicitly[Ordering[T]].compare(x, head) <= 0) {
+          val newNode = Node(x)
+          newNode.tail.set(s0)
+          if (!node.compareAndSet(s0, Some(newNode))) add(node, x)
+        } else {
+          // The head value is not lost
+          add(tail, x)
+        }
+      }
+    }
+  }
+
+  def add(x: T): Unit = {
+    add(root, x)
+  }
+
+  def iterator: Iterator[T] = new Iterator[T] {
+    private var nodeIter = root.get()
+
+    override def hasNext: Boolean = nodeIter.isDefined == true
+
+    override def next(): T = {
+      root.get() match {
+        case None => throw new NoSuchElementException("Basically impossible state right here")
+        case Some(node) => {
+          nodeIter = node.tail.get()
+          node.head
+        }
+      }
+    }
+  }
+
 }
