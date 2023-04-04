@@ -58,7 +58,8 @@ object ExecutionContextGlobal extends App {
 }
 
 // We can also create an ExecutionContext from an Executor using `fromExecutor` and `fromExecutorService` methods:
-object ExecutionContextCreate extends App { val pool =
+object ExecutionContextCreate extends App {
+  val pool =
     new ForkJoinPool(
       2
     ) // Parallelism level (# of worker threads in the thread pool)
@@ -564,7 +565,10 @@ class ConcurrentSortedListNode[T: Ordering] {
 
     override def next(): T = {
       root.get() match {
-        case None => throw new NoSuchElementException("Basically impossible state right here")
+        case None =>
+          throw new NoSuchElementException(
+            "Basically impossible state right here"
+          )
         case Some(node) => {
           nodeIter = node.tail.get()
           node.head
@@ -573,4 +577,74 @@ class ConcurrentSortedListNode[T: Ordering] {
     }
   }
 
+}
+
+/** Implement a LazyCell class with the following interface:
+  *
+  * class LazyCell[T](initialization: =>T) { def apply(): T = ??? }
+  *
+  * Creating a LazyCell object and calling the apply method must have the same
+  * semantics as declaring a lazy value and reading it, respectively. You are
+  * not allowed to use lazy values in your implementation.
+  */
+class LazyCell[T](initialization: => T) {
+  // Remember that lazy values implement the double locking idiom
+  @volatile private var value: Option[T] = None
+
+  // Does not evaluate initialization multiple times
+  def apply(): T = {
+    value match {
+      case None =>
+        this.synchronized {
+          value match {
+            case None => {
+              value = Some(initialization)
+              value.get
+            }
+            case Some(value) => value
+          }
+        }
+      case Some(value) => value
+    }
+  }
+}
+
+object LazyCell extends App {
+
+  def func = {
+    Instantiator.log("start...")
+    Thread.sleep(10000)
+    s"Calculation by ${Thread.currentThread().getName}"
+  }
+
+  val a = new LazyCell[String](func)
+
+  (0 to 50)
+    .map((i) =>
+      Instantiator.thread({
+        Thread.sleep((Math.random * 10).toInt)
+        println(a.apply)
+      })
+    )
+    .foreach(_.join)
+}
+
+/** Implement a PureLazyCell class with the same interface and semantics as the
+  * LazyCell class from the previous exercise. The PureLazyCell class assumes
+  * that the initialization parameter does not cause side effects, so it can be
+  * evaluated more than once.
+  */
+class PureLazyCell[T](initialization: => T) {
+  val atomic: AtomicReference[Option[T]] = new AtomicReference[Option[T]](None)
+
+  @tailrec
+  final def apply(): T = {
+    val s0 = atomic.get()
+    s0 match {
+      case None =>
+        if (!atomic.compareAndSet(s0, Some(initialization))) apply()
+        else initialization
+      case Some(value) => value
+    }
+  }
 }
